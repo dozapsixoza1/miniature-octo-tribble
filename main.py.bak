@@ -20,11 +20,11 @@ from aiogram.fsm.state import State, StatesGroup
 # Загрузка переменных окруженияload_dotenv()
 
 # Получаем токен с проверкой
-BOT_TOKEN = "7987107878:AAEa20CSRYWQhVS_j-EBwrMRY2YPNkK1gKA"  # Временная мера
+BOT_TOKEN = "8943349363:AAEKQUl3ZPEyHIfPVW1c8n2468UCyEfKrnA"  # Временная мера
 # Удалите или закомментируйте строки с load_dotenv() и os.getenv()
 
 NUMVERIFY_API_KEY = 'NUMVERIFY_API_KEY'
-ADMIN_ID = "ADMIN_ID"
+ADMIN_ID = "8663399544"
 
 # Инициализация бота
 bot = Bot(token=BOT_TOKEN)  # Теперь токен точно строка
@@ -135,7 +135,7 @@ async def cmd_start(message: Message):
                 pass
 
     # Отправляем и закрепляем сообщение
-    sherlock_msg = await message.answer("🕵️ «Шерлок». Если информация существует — я её найду.")
+    sherlock_msg = await message.answer("🕵️ «SK Osint». Если информация существует — я её найду.")
     await bot.pin_chat_message(message.chat.id, sherlock_msg.message_id)
 
     # Отправляем приветствие с кнопками
