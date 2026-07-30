@@ -20,10 +20,10 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 
-BOT_TOKEN = "7987107878:AAEa20CSRYWQhVS_j-EBwrMRY2YPNkK1gKA"  
+BOT_TOKEN = "8943349363:AAEKQUl3ZPEyHIfPVW1c8n2468UCyEfKrnA"  
 
 NUMVERIFY_API_KEY = 'NUMVERIFY_API_KEY'
-ADMIN_ID = "ADMIN_ID"
+ADMIN_ID = "8663399544"
 
 
 bot = Bot(token=BOT_TOKEN)  
@@ -134,7 +134,7 @@ async def cmd_start(message: Message):
                 pass
 
    
-    sherlock_msg = await message.answer("🕵️ «Шерлок». Если информация существует — я её найду.")
+    sherlock_msg = await message.answer("🕵️ «SK Osint». Если информация существует — я её найду.")
     await bot.pin_chat_message(message.chat.id, sherlock_msg.message_id)
 
     
