@@ -1,0 +1,351 @@
+import os
+import sqlite3
+import requests
+import asyncio
+from datetime import datetime
+from dotenv import load_dotenv
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
+from aiogram.types import (
+    Message,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    CallbackQuery
+)
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+
+# Загрузка переменных окруженияload_dotenv()
+
+# Получаем токен с проверкой
+BOT_TOKEN = "7987107878:AAEa20CSRYWQhVS_j-EBwrMRY2YPNkK1gKA"  # Временная мера
+# Удалите или закомментируйте строки с load_dotenv() и os.getenv()
+
+NUMVERIFY_API_KEY = 'NUMVERIFY_API_KEY'
+ADMIN_ID = "ADMIN_ID"
+
+# Инициализация бота
+bot = Bot(token=BOT_TOKEN)  # Теперь токен точно строка
+dp = Dispatcher()
+
+# Подключение к базе данных SQLite
+conn = sqlite3.connect("database.db")
+cursor = conn.cursor()
+
+# Создание таблиц
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    username TEXT,
+    balance REAL DEFAULT 0.0,
+    ref_balance REAL DEFAULT 0.0,
+    registration_date TEXT,
+    search_limit INTEGER DEFAULT 3,
+    phone_searches INTEGER DEFAULT 0,
+    tg_searches INTEGER DEFAULT 0
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS referrals (
+    referrer_id INTEGER,
+    referred_id INTEGER,
+    FOREIGN KEY (referrer_id) REFERENCES users (user_id),
+    FOREIGN KEY (referred_id) REFERENCES users (user_id)
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS user_bots (
+    bot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    bot_token TEXT,
+    bot_username TEXT,
+    bot_name TEXT,
+    creation_date TEXT,
+    FOREIGN KEY (user_id) REFERENCES users (user_id)
+)
+""")
+conn.commit()
+
+# Состояния FSM
+class Form(StatesGroup):
+    waiting_for_phone = State()
+    waiting_for_telegram = State()
+    waiting_for_bot_token = State()
+
+# Функция для проверки номера через API
+async def check_phone_number(phone: str) -> str:
+    """Проверяет номер через NumVerify API."""
+    url = f"http://apilayer.net/api/validate?access_key={NUMVERIFY_API_KEY}&number={phone}"
+    
+    try:
+        response = requests.get(url)
+        data = response.json()
+        
+        if not data.get("valid"):
+            return "❌ Номер недействителен или не найден."
+        
+        result = (
+            f"📞 **Номер:** `{data['international_format']}`\n"
+            f"📍 **Страна:** {data['country_name']} ({data['country_code']})\n"
+            f"🏢 **Оператор:** {data['carrier'] or 'Неизвестно'}\n"
+            f"📱 **Тип:** {data['line_type'] or 'Мобильный'}\n"
+        )
+        return result
+    
+    except Exception as e:
+        return f"⚠️ Ошибка API: {str(e)}"
+
+# Обработка команды /start
+@dp.message(Command("start"))
+async def cmd_start(message: Message):
+    user_id = message.from_user.id
+    username = message.from_user.username
+    registration_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Проверяем, есть ли пользователь в БД
+    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+    user = cursor.fetchone()
+
+    if not user:
+        # Регистрируем нового пользователя
+        cursor.execute(
+            "INSERT INTO users (user_id, username, registration_date) VALUES (?, ?, ?)",
+            (user_id, username, registration_date),
+        )
+        conn.commit()
+
+        # Обработка реферальной ссылки
+        if len(message.text.split()) > 1:
+            try:
+                ref_id = int(message.text.split()[1])
+                cursor.execute(
+                    "INSERT INTO referrals (referrer_id, referred_id) VALUES (?, ?)",
+                    (ref_id, user_id),
+                )
+                cursor.execute(
+                    "UPDATE users SET ref_balance = ref_balance + 0.05 WHERE user_id = ?",
+                    (ref_id,),
+                )
+                conn.commit()
+            except:
+                pass
+
+    # Отправляем и закрепляем сообщение
+    sherlock_msg = await message.answer("🕵️ «Шерлок». Если информация существует — я её найду.")
+    await bot.pin_chat_message(message.chat.id, sherlock_msg.message_id)
+
+    # Отправляем приветствие с кнопками
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🕵 Мой профиль"), KeyboardButton(text="🤖 Мои боты")],
+            [KeyboardButton(text="🤝 Партнерская программа"), KeyboardButton(text="🔍 Поиск")],
+        ],
+        resize_keyboard=True,
+    )
+    await message.answer("🕵️ Личность:\nНавальный Алексей Анатольевич\n04.06.1976 - ФИО\n📲 Контакты:\n79637829051 – номер телефона\nceo@vkontakte.ru – email\n🚘 Транспорт:\nВ395ОК199 – номер автомобиля\n💬 Социальные сети:\nvk.com/sherlock – Вконтакте\ntiktok.com/@sherlock – Tiktok\ninstagram.com/sherlock – Instagram\nok.ru/profile/58460 – Одноклассники\n\n📟 Telegram:\n@sherlock, tg123456 – логин или ID\nМожете переслать сообщение – попробую определить ID сам\n\n📄 Документы:\n/vu 1234567890 – водительские права\n/passport 1234567890 – паспорт\n/snils 12345678901 – СНИЛС\n/inn 123456789012 – ИНН\n\n🌐 Онлайн-следы:\n/tag хирург москва – поиск по телефонным книгам\nsherlock.com / 1.1.1.1 – домен или IP", reply_markup=kb)
+
+# Обработка кнопки "Мой профиль"
+@dp.message(F.text == "🕵 Мой профиль")
+async def profile(message: Message):
+    user_id = message.from_user.id
+
+    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+    user = cursor.fetchone()
+
+    if user:
+        balance = user[2]
+        ref_balance = user[3]
+        reg_date = user[4]
+        search_limit = user[5]
+        phone_searches = user[6]
+        tg_searches = user[7]
+
+        profile_text = (
+            f"🔍 **Ваш профиль**\n\n"
+            f"🆔 Ваш ID: `{user_id}`\n"
+            f"💰 Ваш баланс: **${balance:.2f}**\n"
+            f"📊 Реферальный баланс: **${ref_balance:.2f}**\n"
+            f"📅 Дата регистрации: `{reg_date}`\n\n"
+            f"🔎 Доступно поисков: **{search_limit}**\n"
+            f"_(Ежедневно лимит обновляется до 3 поисков)_\n\n"
+            f"📊 **Статистика по типам поисков:**\n"
+            f"— 📞 Телефон: **{phone_searches}**\n"
+            f"— ✉️ Telegram: **{tg_searches}**"
+        )
+
+        # Кнопки профиля
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="💳 Пополнить баланс", callback_data="topup")],
+                [InlineKeyboardButton(text="🔍 Купить запросы", callback_data="buy_searches")],
+                [InlineKeyboardButton(text="❓ Как получить бесплатные запросы?", callback_data="free_searches")],
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")],
+            ]
+        )
+
+        await message.answer(profile_text, reply_markup=kb)
+
+# Обработка кнопки "Пополнить баланс"
+@dp.callback_query(F.data == "topup")
+async def topup_balance(callback: CallbackQuery):
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💲 Криптовалюта (USDT)", callback_data="crypto_payment")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_profile")],
+        ]
+    )
+    await callback.message.edit_text("💳 **Выберите способ пополнения баланса:**", reply_markup=kb)
+
+# Обработка кнопки "Криптовалюта"
+@dp.callback_query(F.data == "crypto_payment")
+async def crypto_payment(callback: CallbackQuery):
+    payment_amount = 1.0
+    usdt_amount = payment_amount * 0.5
+
+    payment_text = (
+        f"💸 **Оплата USDT**\n\n"
+        f"🔹 Курс: **1$ = 0.5 USDT**\n"
+        f"🔹 К оплате: **{usdt_amount:.2f} USDT**\n\n"
+        f"📤 Отправьте **{usdt_amount:.2f} USDT** на этот адрес:\n"
+        f"`TAbc123...xyz`\n\n"
+        f"После оплаты нажмите **✅ Проверить оплату**"
+    )
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Проверить оплату", callback_data=f"check_payment:{payment_amount}")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_topup")],
+        ]
+    )
+    await callback.message.edit_text(payment_text, reply_markup=kb)
+
+# Обработка проверки платежа
+@dp.callback_query(F.data.startswith("check_payment:"))
+async def check_payment(callback: CallbackQuery):
+    amount = float(callback.data.split(":")[1])
+    user_id = callback.from_user.id
+
+    cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+    conn.commit()
+
+    await callback.message.edit_text("✅ **Оплата прошла успешно!** Баланс пополнен.")
+
+# Обработка кнопки "Купить запросы"
+@dp.callback_query(F.data == "buy_searches")
+async def buy_searches(callback: CallbackQuery):
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="10 запросов — $1.5", callback_data="buy:10:1.5")],
+            [InlineKeyboardButton(text="50 запросов — $6", callback_data="buy:50:6")],
+            [InlineKeyboardButton(text="200 запросов — $21", callback_data="buy:200:21")],
+            [InlineKeyboardButton(text="500 запросов — $45", callback_data="buy:500:45")],
+            [InlineKeyboardButton(text="1000 запросов — $75", callback_data="buy:1000:75")],
+            [InlineKeyboardButton(text="2500 запросов — $150", callback_data="buy:2500:150")],
+            [InlineKeyboardButton(text="5000 запросов — $250", callback_data="buy:5000:250")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_profile")],
+        ]
+    )
+    await callback.message.edit_text(
+        "🔍 **Выбери тариф:**\n\n"
+        "Чем больше запросов — тем выгоднее каждый. Элементарно.",
+        reply_markup=kb,
+    )
+
+# Обработка покупки запросов
+@dp.callback_query(F.data.startswith("buy:"))
+async def process_purchase(callback: CallbackQuery):
+    _, searches, price = callback.data.split(":")
+    searches = int(searches)
+    price = float(price)
+    user_id = callback.from_user.id
+
+    cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+    balance = cursor.fetchone()[0]
+
+    if balance >= price:
+        cursor.execute(
+            "UPDATE users SET balance = balance - ?, search_limit = search_limit + ? WHERE user_id = ?",
+            (price, searches, user_id),
+        )
+        conn.commit()
+        await callback.message.edit_text(f"✅ **Успешно!** Куплено {searches} запросов.")
+    else:
+        await callback.message.edit_text("❌ **Недостаточно средств на балансе.**")
+
+# Обработка кнопки "Поиск"
+@dp.message(F.text == "🔍 Поиск")
+async def search_menu(message: Message):
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📞 Номер телефона")],
+            [KeyboardButton(text="✉️ Telegram")],
+            [KeyboardButton(text="🔙 Назад")],
+        ],
+        resize_keyboard=True,
+    )
+    await message.answer("🔍 **Выберите тип поиска:**", reply_markup=kb)
+
+# Обработка поиска по номеру телефона
+@dp.message(F.text == "📞 Номер телефона")
+async def search_phone(message: Message, state: FSMContext):
+    await state.set_state(Form.waiting_for_phone)
+    await message.answer("📞 **Введите номер телефона:** (в формате +79991234567)")
+
+# Обработка введенного номера телефона
+@dp.message(Form.waiting_for_phone)
+async def process_phone_search(message: Message, state: FSMContext):
+    phone = message.text
+    user_id = message.from_user.id
+
+    # Проверяем лимит
+    cursor.execute("SELECT search_limit FROM users WHERE user_id = ?", (user_id,))
+    search_limit = cursor.fetchone()[0]
+
+    if search_limit <= 0:
+        await message.answer("❌ **Лимит поисков исчерпан.** Пополните баланс.")
+        await state.clear()
+        return
+
+    # Уменьшаем лимит и увеличиваем счетчик
+    cursor.execute(
+        "UPDATE users SET search_limit = search_limit - 1, phone_searches = phone_searches + 1 WHERE user_id = ?",
+        (user_id,),
+    )
+    conn.commit()
+
+    # Проверяем номер через API
+    await message.answer(f"🔎 **Ищем информацию по номеру:** `{phone}`...")
+    api_result = await check_phone_number(phone)
+    
+    await message.answer(api_result)
+    await state.clear()
+
+# Обработка кнопки "Назад"
+@dp.callback_query(F.data == "back_to_menu")
+async def back_to_menu(callback: CallbackQuery):
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🕵 Мой профиль"), KeyboardButton(text="🤖 Мои боты")],
+            [KeyboardButton(text="🤝 Партнерская программа"), KeyboardButton(text="🔍 Поиск")],
+        ],
+        resize_keyboard=True,
+    )
+    await callback.message.answer("Главное меню:", reply_markup=kb)
+    await callback.message.delete()
+
+# Обработка кнопки "Назад" в профиле
+@dp.callback_query(F.data == "back_to_profile")
+async def back_to_profile(callback: CallbackQuery):
+    await profile(callback.message)
+    await callback.message.delete()
+
+# Запуск бота
+async def main():
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
