@@ -99,6 +99,32 @@ CREATE TABLE IF NOT EXISTS search_history (
 """)
 conn.commit()
 
+# ========== МИГРАЦИЯ БАЗЫ (добавление недостающих колонок) ==========
+def migrate_db():
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # уже есть
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN banned INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN total_searches INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN last_activity TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN daily_bonus_date TEXT")
+    except sqlite3.OperationalError:
+        pass
+    conn.commit()
+
+migrate_db()
+
 # ========== СОСТОЯНИЯ FSM ==========
 class Form(StatesGroup):
     waiting_for_phone = State()
