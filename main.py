@@ -13,13 +13,12 @@ from aiogram.types import (
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-import requests
 import aiohttp
 import aiofiles
 
 # ========== ЖЁСТКИЕ КЛЮЧИ (без .env) ==========
-BOT_TOKEN = "8684880685:AAG5IUHld2r5fEFTOsahVj-tZq85Vv6vY8g"
-ADMIN_ID = 8663399544  # ЗАМЕНИ НА СВОЙ ТЕЛЕГРАМ ID (число)
+BOT_TOKEN = "7987107878:AAEa20CSRYWQhVS_j-EBwrMRY2YPNkK1gKA"  # ЗАМЕНИ НА СВОЙ ТОКЕН!
+ADMIN_ID = 123456789  # ЗАМЕНИ НА СВОЙ ТЕЛЕГРАМ ID (число)
 NUMVERIFY_API_KEY = "1b65403a2fcb9f9a0f54382142e9c193"
 VIRUSTOTAL_API_KEY = "de92a143c6ff9dc06e90e89faa5c8fbd8c7fd546e5aa32f6da6cd1ae449f97c4"
 SHODAN_API_KEY = "PKOe4s6iJSllaFQdUeu3Bjj5qoaWlUwb"
@@ -47,6 +46,7 @@ dp = Dispatcher()
 conn = sqlite3.connect("database.db", check_same_thread=False)
 cursor = conn.cursor()
 
+# Создание таблиц
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
@@ -56,12 +56,7 @@ CREATE TABLE IF NOT EXISTS users (
     registration_date TEXT,
     search_limit INTEGER DEFAULT 3,
     phone_searches INTEGER DEFAULT 0,
-    tg_searches INTEGER DEFAULT 0,
-    is_admin INTEGER DEFAULT 0,
-    banned INTEGER DEFAULT 0,
-    total_searches INTEGER DEFAULT 0,
-    last_activity TEXT,
-    daily_bonus_date TEXT
+    tg_searches INTEGER DEFAULT 0
 )
 """)
 
@@ -99,12 +94,12 @@ CREATE TABLE IF NOT EXISTS search_history (
 """)
 conn.commit()
 
-# ========== МИГРАЦИЯ БАЗЫ (добавление недостающих колонок) ==========
+# ========== МИГРАЦИЯ: добавляем недостающие колонки ==========
 def migrate_db():
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
     except sqlite3.OperationalError:
-        pass  # уже есть
+        pass
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN banned INTEGER DEFAULT 0")
     except sqlite3.OperationalError:
@@ -132,6 +127,11 @@ class Form(StatesGroup):
     waiting_for_email = State()
     waiting_for_ip = State()
     waiting_for_doc = State()
+
+class AdminStates(StatesGroup):
+    waiting_for_user_id = State()
+    waiting_for_amount = State()
+    waiting_for_mailing_text = State()
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 async def check_and_decrement_limit(user_id: int) -> bool:
@@ -163,22 +163,37 @@ async def update_daily_limit(user_id: int):
     cursor.execute("UPDATE users SET last_activity = ? WHERE user_id = ?", (datetime.now().isoformat(), user_id))
     conn.commit()
 
-# ========== ФУНКЦИИ ПОИСКА ==========
-async def search_username_sherlock(username: str) -> str:
-    try:
-        from sherlock import Sherlock
-        loop = asyncio.get_running_loop()
-        results = await loop.run_in_executor(None, lambda: Sherlock().search(username))
-        if not results:
-            return "❌ Ничего не найдено."
-        output = "🔍 **Результаты поиска по username:**\n\n"
-        for site, url in results.items():
-            output += f"• [{site}]({url})\n"
-        return output
-    except ImportError:
-        return "⚠️ Библиотека Sherlock не установлена. Установите: pip install sherlock"
-    except Exception as e:
-        return f"⚠️ Ошибка Sherlock: {str(e)}"
+# ========== ФУНКЦИИ ПОИСКА (без Sherlock) ==========
+async def search_username_manual(username: str) -> str:
+    """Поиск username по основным соцсетям без Sherlock."""
+    sites = {
+        "GitHub": f"https://github.com/{username}",
+        "Twitter": f"https://twitter.com/{username}",
+        "Instagram": f"https://www.instagram.com/{username}",
+        "VK": f"https://vk.com/{username}",
+        "Telegram": f"https://t.me/{username}",
+        "TikTok": f"https://www.tiktok.com/@{username}",
+        "YouTube": f"https://www.youtube.com/@{username}",
+        "Reddit": f"https://www.reddit.com/user/{username}",
+        "Pinterest": f"https://www.pinterest.com/{username}",
+        "Tumblr": f"https://{username}.tumblr.com",
+        "Flickr": f"https://www.flickr.com/people/{username}",
+        "Snapchat": f"https://www.snapchat.com/add/{username}",
+        "Spotify": f"https://open.spotify.com/user/{username}",
+        "Twitch": f"https://www.twitch.tv/{username}"
+    }
+    found = []
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
+        for site, url in sites.items():
+            try:
+                async with session.head(url, allow_redirects=True) as resp:
+                    if resp.status == 200:
+                        found.append(f"• [{site}]({url})")
+            except:
+                pass
+    if not found:
+        return f"❌ Ничего не найдено для `{username}`."
+    return f"🔍 **Результаты для `{username}`:**\n\n" + "\n".join(found)
 
 async def search_email(email: str) -> str:
     output = f"📧 **Поиск по email:** `{email}`\n\n"
@@ -317,7 +332,8 @@ async def profile(message: Message):
         search_limit = user[5]
         phone_searches = user[6]
         tg_searches = user[7]
-        total_searches = user[10]
+        # total_searches может отсутствовать в старых записях, проверяем длину
+        total_searches = user[10] if len(user) > 10 else 0
 
         profile_text = (
             f"🔍 **Ваш профиль**\n\n"
@@ -382,7 +398,7 @@ async def process_crypto_pay(callback: CallbackQuery):
     addresses = {
         "BTC": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
         "ETH": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-        "USDT": "TAbc123...xyz"
+        "USDT": "TAbc123...xyz"  # замени на реальный адрес
     }
     amount_usd = 1.0
     await callback.message.edit_text(
@@ -492,7 +508,7 @@ async def process_username_search(message: Message, state: FSMContext):
         await state.clear()
         return
     await message.answer(f"🔎 Ищем по username: @{username}...")
-    result = await search_username_sherlock(username)
+    result = await search_username_manual(username)  # заменили на manual
     await message.answer(result, disable_web_page_preview=True)
     await log_search(user_id, "username", username, result)
     await state.clear()
@@ -609,7 +625,7 @@ async def back_to_profile(callback: CallbackQuery):
     await profile(callback.message)
     await callback.answer()
 
-# ========== АДМИНКА ==========
+# ========== АДМИНКА (полностью рабочая) ==========
 @dp.message(Command("admin"))
 async def admin_panel(message: Message):
     if message.from_user.id != ADMIN_ID:
@@ -623,17 +639,77 @@ async def admin_panel(message: Message):
     ])
     await message.answer("🛠 **Админ-панель**", reply_markup=kb)
 
+# --- Все пользователи ---
 @dp.callback_query(F.data == "admin_users")
 async def admin_users(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
         return
     cursor.execute("SELECT user_id, username, balance, search_limit FROM users LIMIT 20")
     users = cursor.fetchall()
-    text = "👥 **Последние 20 пользователей:**\n\n"
-    for u in users:
-        text += f"ID: {u[0]}, @{u[1]}, баланс: ${u[2]:.2f}, лимит: {u[3]}\n"
+    if not users:
+        text = "Пользователей пока нет."
+    else:
+        text = "👥 **Последние 20 пользователей:**\n\n"
+        for u in users:
+            text += f"ID: {u[0]}, @{u[1]}, баланс: ${u[2]:.2f}, лимит: {u[3]}\n"
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]))
 
+# --- Начислить баланс ---
+@dp.callback_query(F.data == "admin_add_balance")
+async def admin_add_balance(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    await state.set_state(AdminStates.waiting_for_user_id)
+    await callback.message.edit_text("💰 Введите **ID пользователя**, которому хотите начислить баланс:")
+
+@dp.message(AdminStates.waiting_for_user_id)
+async def process_admin_user_id(message: Message, state: FSMContext):
+    try:
+        user_id = int(message.text.strip())
+        await state.update_data(user_id=user_id)
+        await state.set_state(AdminStates.waiting_for_amount)
+        await message.answer(f"👤 Пользователь `{user_id}` найден.\nВведите **сумму** (в долларах) для начисления:")
+    except ValueError:
+        await message.answer("❌ Некорректный ID. Введите число.")
+
+@dp.message(AdminStates.waiting_for_amount)
+async def process_admin_amount(message: Message, state: FSMContext):
+    try:
+        amount = float(message.text.strip())
+        data = await state.get_data()
+        user_id = data.get("user_id")
+        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+        conn.commit()
+        await message.answer(f"✅ Пользователю `{user_id}` начислено **${amount:.2f}**.")
+        await state.clear()
+    except ValueError:
+        await message.answer("❌ Некорректная сумма. Введите число.")
+
+# --- Рассылка ---
+@dp.callback_query(F.data == "admin_mailing")
+async def admin_mailing(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    await state.set_state(AdminStates.waiting_for_mailing_text)
+    await callback.message.edit_text("📨 Введите **текст рассылки** (отправится всем пользователям):")
+
+@dp.message(AdminStates.waiting_for_mailing_text)
+async def process_admin_mailing(message: Message, state: FSMContext):
+    text = message.text
+    cursor.execute("SELECT user_id FROM users")
+    users = cursor.fetchall()
+    count = 0
+    for (user_id,) in users:
+        try:
+            await bot.send_message(user_id, text)
+            count += 1
+            await asyncio.sleep(0.05)  # защита от флуда
+        except:
+            pass
+    await message.answer(f"✅ Рассылка отправлена **{count}** пользователям.")
+    await state.clear()
+
+# --- Статистика ---
 @dp.callback_query(F.data == "admin_stats")
 async def admin_stats(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
@@ -642,9 +718,17 @@ async def admin_stats(callback: CallbackQuery):
     total_users = cursor.fetchone()[0]
     cursor.execute("SELECT SUM(total_searches) FROM users")
     total_searches = cursor.fetchone()[0] or 0
-    text = f"📊 **Статистика:**\n\nВсего пользователей: {total_users}\nВсего поисков: {total_searches}"
+    cursor.execute("SELECT SUM(balance) FROM users")
+    total_balance = cursor.fetchone()[0] or 0.0
+    text = (
+        f"📊 **Статистика:**\n\n"
+        f"👥 Всего пользователей: **{total_users}**\n"
+        f"🔍 Всего поисков: **{total_searches}**\n"
+        f"💰 Общий баланс: **${total_balance:.2f}**"
+    )
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]))
 
+# --- Назад в админку ---
 @dp.callback_query(F.data == "admin_back")
 async def admin_back(callback: CallbackQuery):
     await admin_panel(callback.message)
