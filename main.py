@@ -17,7 +17,7 @@ import aiohttp
 import aiofiles
 
 # ========== ЖЁСТКИЕ КЛЮЧИ (без .env) ==========
-BOT_TOKEN = "7987107878:AAEa20CSRYWQhVS_j-EBwrMRY2YPNkK1gKA"  # ЗАМЕНИ НА СВОЙ ТОКЕН!
+BOT_TOKEN = "8684880685:AAG5IUHld2r5fEFTOsahVj-tZq85Vv6vY8g"  # ЗАМЕНИ НА СВОЙ ТОКЕН!
 ADMIN_ID = 123456789  # ЗАМЕНИ НА СВОЙ ТЕЛЕГРАМ ID (число)
 NUMVERIFY_API_KEY = "1b65403a2fcb9f9a0f54382142e9c193"
 VIRUSTOTAL_API_KEY = "de92a143c6ff9dc06e90e89faa5c8fbd8c7fd546e5aa32f6da6cd1ae449f97c4"
