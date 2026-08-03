@@ -3,9 +3,8 @@ import sqlite3
 import asyncio
 import re
 import hashlib
-import json
+import shutil
 from datetime import datetime, timedelta
-from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import (
@@ -18,26 +17,36 @@ import requests
 import aiohttp
 import aiofiles
 
-# ========== Загрузка переменных ==========
-load_dotenv()
+# ========== ЖЁСТКИЕ КЛЮЧИ (без .env) ==========
+BOT_TOKEN = "7987107878:AAEa20CSRYWQhVS_j-EBwrMRY2YPNkK1gKA"
+ADMIN_ID = 123456789  # ЗАМЕНИ НА СВОЙ ТЕЛЕГРАМ ID (число)
+NUMVERIFY_API_KEY = "1b65403a2fcb9f9a0f54382142e9c193"
+VIRUSTOTAL_API_KEY = "de92a143c6ff9dc06e90e89faa5c8fbd8c7fd546e5aa32f6da6cd1ae449f97c4"
+SHODAN_API_KEY = "PKOe4s6iJSllaFQdUeu3Bjj5qoaWlUwb"
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
-NUMVERIFY_API_KEY = os.getenv("NUMVERIFY_API_KEY", "")
-VIRUSTOTAL_API_KEY = os.getenv("VIRUSTOTAL_API_KEY", "")
-SHODAN_API_KEY = os.getenv("SHODAN_API_KEY", "")
+# ========== БЭКАП БАЗЫ ПРИ ЗАПУСКЕ ==========
+BACKUP_DIR = "backup"
+os.makedirs(BACKUP_DIR, exist_ok=True)
 
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN не задан в .env")
+def backup_database():
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = os.path.join(BACKUP_DIR, f"database_{timestamp}.db")
+        shutil.copy2("database.db", backup_path)
+        print(f"[✅] Бэкап создан: {backup_path}")
+    except Exception as e:
+        print(f"[⚠] Ошибка бэкапа: {e}")
 
+backup_database()
+
+# ========== ИНИЦИАЛИЗАЦИЯ БОТА ==========
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# ========== База данных ==========
+# ========== БАЗА ДАННЫХ ==========
 conn = sqlite3.connect("database.db", check_same_thread=False)
 cursor = conn.cursor()
 
-# Создание таблиц (с новыми полями)
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
@@ -90,7 +99,7 @@ CREATE TABLE IF NOT EXISTS search_history (
 """)
 conn.commit()
 
-# ========== Состояния FSM ==========
+# ========== СОСТОЯНИЯ FSM ==========
 class Form(StatesGroup):
     waiting_for_phone = State()
     waiting_for_username = State()
@@ -98,9 +107,8 @@ class Form(StatesGroup):
     waiting_for_ip = State()
     waiting_for_doc = State()
 
-# ========== Вспомогательные функции ==========
+# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 async def check_and_decrement_limit(user_id: int) -> bool:
-    """Проверяет и уменьшает лимит поиска. Возвращает True, если лимит есть."""
     cursor.execute("SELECT search_limit FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     if not row or row[0] <= 0:
@@ -113,7 +121,6 @@ async def check_and_decrement_limit(user_id: int) -> bool:
     return True
 
 async def log_search(user_id: int, search_type: str, query: str, result: str):
-    """Логирует поиск в историю."""
     cursor.execute(
         "INSERT INTO search_history (user_id, search_type, query, result, timestamp) VALUES (?, ?, ?, ?, ?)",
         (user_id, search_type, query, result[:500], datetime.now().isoformat())
@@ -121,7 +128,6 @@ async def log_search(user_id: int, search_type: str, query: str, result: str):
     conn.commit()
 
 async def update_daily_limit(user_id: int):
-    """Обновляет ежедневный лимит (если прошёл день)."""
     cursor.execute("SELECT last_activity FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     if row and row[0]:
@@ -131,12 +137,10 @@ async def update_daily_limit(user_id: int):
     cursor.execute("UPDATE users SET last_activity = ? WHERE user_id = ?", (datetime.now().isoformat(), user_id))
     conn.commit()
 
-# ========== Функции поиска ==========
+# ========== ФУНКЦИИ ПОИСКА ==========
 async def search_username_sherlock(username: str) -> str:
-    """Поиск username через библиотеку sherlock (синхронный вызов в потоке)."""
     try:
         from sherlock import Sherlock
-        # Sherlock работает синхронно, запустим в отдельном потоке
         loop = asyncio.get_running_loop()
         results = await loop.run_in_executor(None, lambda: Sherlock().search(username))
         if not results:
@@ -151,9 +155,7 @@ async def search_username_sherlock(username: str) -> str:
         return f"⚠️ Ошибка Sherlock: {str(e)}"
 
 async def search_email(email: str) -> str:
-    """Проверка email через Have I Been Pwned и Gravatar."""
     output = f"📧 **Поиск по email:** `{email}`\n\n"
-    # Проверка утечек
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(f"https://haveibeenpwned.com/api/v3/breachedaccount/{email}") as resp:
@@ -166,7 +168,6 @@ async def search_email(email: str) -> str:
                     output += "✅ Не найден в известных утечках.\n"
     except Exception:
         output += "⚠️ Ошибка проверки утечек.\n"
-    # Gravatar
     try:
         hash_md5 = hashlib.md5(email.lower().encode()).hexdigest()
         gravatar_url = f"https://www.gravatar.com/avatar/{hash_md5}?d=404"
@@ -181,10 +182,8 @@ async def search_email(email: str) -> str:
     return output
 
 async def search_ip_domain(query: str) -> str:
-    """Проверка IP или домена через VirusTotal."""
     if not VIRUSTOTAL_API_KEY:
         return "⚠️ API-ключ VirusTotal не задан."
-    # Определяем, IP или домен
     is_ip = re.match(r'^\d+\.\d+\.\d+\.\d+$', query) is not None
     url = f"https://www.virustotal.com/api/v3/domains/{query}" if not is_ip else f"https://www.virustotal.com/api/v3/ip_addresses/{query}"
     headers = {"x-apikey": VIRUSTOTAL_API_KEY}
@@ -205,11 +204,9 @@ async def search_ip_domain(query: str) -> str:
         return f"⚠️ Ошибка: {str(e)}"
 
 async def search_document(doc_type: str, number: str) -> str:
-    """Заглушка для поиска по документам."""
     return f"📄 **Поиск по {doc_type}:** `{number}`\nДанные временно недоступны (в разработке)."
 
 async def check_phone_number(phone: str) -> str:
-    """Проверка номера через NumVerify."""
     if not NUMVERIFY_API_KEY:
         return "⚠️ API-ключ NumVerify не задан."
     url = f"http://apilayer.net/api/validate?access_key={NUMVERIFY_API_KEY}&number={phone}"
@@ -229,7 +226,7 @@ async def check_phone_number(phone: str) -> str:
     except Exception as e:
         return f"⚠️ Ошибка API: {str(e)}"
 
-# ========== Команда /start ==========
+# ========== КОМАНДА /start ==========
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     user_id = message.from_user.id
@@ -245,7 +242,6 @@ async def cmd_start(message: Message):
             (user_id, username, registration_date),
         )
         conn.commit()
-        # Реферальная ссылка
         if len(message.text.split()) > 1:
             try:
                 ref_id = int(message.text.split()[1])
@@ -255,14 +251,11 @@ async def cmd_start(message: Message):
             except:
                 pass
 
-    # Ежедневное обновление лимита
     await update_daily_limit(user_id)
 
-    # Закрепляем сообщение
-    sherlock_msg = await message.answer("🕵️ «Шерлок». Если информация существует — я её найду.")
-    await bot.pin_chat_message(message.chat.id, sherlock_msg.message_id)
+    sk_msg = await message.answer("🕵️ «SK Osint». Если информация существует — я её найду.")
+    await bot.pin_chat_message(message.chat.id, sk_msg.message_id)
 
-    # Главное меню
     kb = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="🕵 Мой профиль"), KeyboardButton(text="🤖 Мои боты")],
@@ -274,18 +267,18 @@ async def cmd_start(message: Message):
         "🕵️ Личность:\nНавальный Алексей Анатольевич\n04.06.1976 - ФИО\n"
         "📲 Контакты:\n79637829051 – номер телефона\nceo@vkontakte.ru – email\n"
         "🚘 Транспорт:\nВ395ОК199 – номер автомобиля\n"
-        "💬 Социальные сети:\nvk.com/sherlock – Вконтакте\ntiktok.com/@sherlock – Tiktok\n"
-        "instagram.com/sherlock – Instagram\nok.ru/profile/58460 – Одноклассники\n\n"
-        "📟 Telegram:\n@sherlock, tg123456 – логин или ID\n"
+        "💬 Социальные сети:\nvk.com/skosint – Вконтакте\ntiktok.com/@skosint – Tiktok\n"
+        "instagram.com/skosint – Instagram\nok.ru/profile/58460 – Одноклассники\n\n"
+        "📟 Telegram:\n@skosint, tg123456 – логин или ID\n"
         "Можете переслать сообщение – попробую определить ID сам\n\n"
         "📄 Документы:\n/vu 1234567890 – водительские права\n/passport 1234567890 – паспорт\n"
         "/snils 12345678901 – СНИЛС\n/inn 123456789012 – ИНН\n\n"
         "🌐 Онлайн-следы:\n/tag хирург москва – поиск по телефонным книгам\n"
-        "sherlock.com / 1.1.1.1 – домен или IP",
+        "skosint.com / 1.1.1.1 – домен или IP",
         reply_markup=kb
     )
 
-# ========== Профиль ==========
+# ========== ПРОФИЛЬ ==========
 @dp.message(F.text == "🕵 Мой профиль")
 async def profile(message: Message):
     user_id = message.from_user.id
@@ -324,7 +317,7 @@ async def profile(message: Message):
         )
         await message.answer(profile_text, reply_markup=kb)
 
-# ========== Бесплатные запросы ==========
+# ========== БЕСПЛАТНЫЕ ЗАПРОСЫ ==========
 @dp.callback_query(F.data == "free_searches")
 async def free_searches(callback: CallbackQuery):
     await callback.message.edit_text(
@@ -334,7 +327,7 @@ async def free_searches(callback: CallbackQuery):
         "• Скоро появятся задания за запросы"
     )
 
-# ========== Оплата ==========
+# ========== ОПЛАТА ==========
 @dp.callback_query(F.data == "topup")
 async def topup_balance(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(
@@ -365,7 +358,7 @@ async def process_crypto_pay(callback: CallbackQuery):
         "ETH": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
         "USDT": "TAbc123...xyz"
     }
-    amount_usd = 1.0  # можно настроить
+    amount_usd = 1.0
     await callback.message.edit_text(
         f"💸 **Оплата в {currency}**\n\n"
         f"Сумма: {amount_usd} USD (эквивалент в {currency} по курсу)\n"
@@ -389,7 +382,7 @@ async def check_payment(callback: CallbackQuery):
 async def back_to_topup(callback: CallbackQuery):
     await topup_balance(callback)
 
-# ========== Покупка запросов ==========
+# ========== ПОКУПКА ЗАПРОСОВ ==========
 @dp.callback_query(F.data == "buy_searches")
 async def buy_searches(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(
@@ -424,7 +417,7 @@ async def process_purchase(callback: CallbackQuery):
     else:
         await callback.message.edit_text("❌ Недостаточно средств.")
 
-# ========== Поиск (меню) ==========
+# ========== МЕНЮ ПОИСКА ==========
 @dp.message(F.text == "🔍 Поиск")
 async def search_menu(message: Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -437,7 +430,7 @@ async def search_menu(message: Message):
     ])
     await message.answer("🔍 **Выберите тип поиска:**", reply_markup=kb)
 
-# ========== Обработчики выбора типа поиска ==========
+# ========== ОБРАБОТЧИКИ ВЫБОРА ==========
 @dp.callback_query(F.data == "search_username")
 async def ask_username(callback: CallbackQuery, state: FSMContext):
     await state.set_state(Form.waiting_for_username)
@@ -463,7 +456,7 @@ async def ask_doc(callback: CallbackQuery, state: FSMContext):
     await state.set_state(Form.waiting_for_doc)
     await callback.message.edit_text("📄 Введите тип и номер: `passport 1234567890` или `inn 123456789012`")
 
-# ========== Обработка ввода для каждого типа ==========
+# ========== ОБРАБОТКА ВВОДА ==========
 @dp.message(Form.waiting_for_username)
 async def process_username_search(message: Message, state: FSMContext):
     username = message.text.strip().lstrip('@')
@@ -503,7 +496,6 @@ async def process_phone_search(message: Message, state: FSMContext):
     await message.answer(f"🔎 Ищем по номеру: {phone}...")
     result = await check_phone_number(phone)
     await message.answer(result)
-    # увеличиваем счётчик phone_searches
     cursor.execute("UPDATE users SET phone_searches = phone_searches + 1 WHERE user_id = ?", (user_id,))
     conn.commit()
     await log_search(user_id, "phone", phone, result)
@@ -542,7 +534,7 @@ async def process_doc_search(message: Message, state: FSMContext):
     await log_search(user_id, doc_type, number, result)
     await state.clear()
 
-# ========== Кнопки "Мои боты" и "Партнёрская программа" ==========
+# ========== КНОПКИ "МОИ БОТЫ" и "ПАРТНЁРКА" ==========
 @dp.message(F.text == "🤖 Мои боты")
 async def my_bots(message: Message):
     user_id = message.from_user.id
@@ -574,7 +566,7 @@ async def referral_program(message: Message):
     )
     await message.answer(text)
 
-# ========== Кнопки "Назад" ==========
+# ========== КНОПКИ "НАЗАД" ==========
 @dp.callback_query(F.data == "back_to_menu")
 async def back_to_menu(callback: CallbackQuery):
     kb = ReplyKeyboardMarkup(
@@ -588,11 +580,10 @@ async def back_to_menu(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "back_to_profile")
 async def back_to_profile(callback: CallbackQuery):
-    # Перерисовываем профиль
-    await profile(callback.message)  # profile принимает Message, а не CallbackQuery
+    await profile(callback.message)
     await callback.answer()
 
-# ========== Админ-панель ==========
+# ========== АДМИНКА ==========
 @dp.message(Command("admin"))
 async def admin_panel(message: Message):
     if message.from_user.id != ADMIN_ID:
@@ -632,9 +623,8 @@ async def admin_stats(callback: CallbackQuery):
 async def admin_back(callback: CallbackQuery):
     await admin_panel(callback.message)
 
-# ========== Запуск ==========
+# ========== ЗАПУСК ==========
 async def main():
-    # Установка вебхука (если нужно) — для поллинга не требуется
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
