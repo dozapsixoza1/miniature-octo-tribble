@@ -19,7 +19,7 @@ import aiofiles
 
 # ========== ЖЁСТКИЕ КЛЮЧИ (без .env) ==========
 BOT_TOKEN = "8684880685:AAG5IUHld2r5fEFTOsahVj-tZq85Vv6vY8g"
-ADMIN_ID = 123456789  # ЗАМЕНИ НА СВОЙ ТЕЛЕГРАМ ID (число)
+ADMIN_ID = 8663399544  # ЗАМЕНИ НА СВОЙ ТЕЛЕГРАМ ID (число)
 NUMVERIFY_API_KEY = "1b65403a2fcb9f9a0f54382142e9c193"
 VIRUSTOTAL_API_KEY = "de92a143c6ff9dc06e90e89faa5c8fbd8c7fd546e5aa32f6da6cd1ae449f97c4"
 SHODAN_API_KEY = "PKOe4s6iJSllaFQdUeu3Bjj5qoaWlUwb"
